@@ -231,15 +231,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    // Sync receipts (order by date descending)
+    // Sync receipts (order by date descending in-memory to prevent Firestore index requirements)
     const receiptsRef = collection(db, "receipts");
-    const receiptsQuery = query(receiptsRef, orderBy("date", "desc"));
-    const unsubReceipts = onSnapshot(receiptsQuery, (querySnap) => {
+    const unsubReceipts = onSnapshot(receiptsRef, (querySnap) => {
       const recs: Receipt[] = [];
       querySnap.forEach((doc) => {
         recs.push({ id: doc.id, ...doc.data() } as Receipt);
       });
+      // Sort in memory by date descending safely
+      recs.sort((a, b) => {
+        const dateA = a.date ? new Date(a.date).getTime() : 0;
+        const dateB = b.date ? new Date(b.date).getTime() : 0;
+        return dateB - dateA;
+      });
       setReceipts(recs);
+    }, (error) => {
+      console.error("Error syncing receipts snapshot:", error);
     });
 
     // Sync clients
@@ -354,9 +361,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Receipt & Client Generation
   const createReceipt = async (receiptData: Omit<Receipt, "id" | "consecutive">) => {
-    // Calculate consecutive number: find max consecutive in existing receipts
-    const nextConsecutive = receipts.length > 0 
-      ? Math.max(...receipts.map((r) => r.consecutive)) + 1 
+    // Calculate consecutive number: safely filter out invalid/NaN consecutives in existing receipts
+    const validConsecutives = receipts
+      .map((r) => Number(r.consecutive))
+      .filter((num) => !isNaN(num) && isFinite(num));
+
+    const nextConsecutive = validConsecutives.length > 0 
+      ? Math.max(...validConsecutives) + 1 
       : 1001;
 
     // Create receipt document reference (with auto id)
@@ -372,7 +383,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Update or Create Client
     // Normalize client name + phone to find unique identifier
-    const clientId = `${receiptData.clientName.trim().toLowerCase().replace(/\s+/g, "-")}-${receiptData.clientPhone.trim().replace(/\D/g, "")}`;
+    const normalizedPhone = (receiptData.clientPhone || "").trim().replace(/\D/g, "");
+    const clientId = `${receiptData.clientName.trim().toLowerCase().replace(/\s+/g, "-")}-${normalizedPhone || "no-phone"}`;
     const clientRef = doc(db, "clients", clientId);
     const clientSnap = await getDoc(clientRef);
 
@@ -380,10 +392,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const currentClient = clientSnap.data() as Client;
       await setDoc(clientRef, {
         ...currentClient,
-        purchaseCount: currentClient.purchaseCount + 1,
-        totalSpent: currentClient.totalSpent + receiptData.totalCharged,
+        purchaseCount: (currentClient.purchaseCount || 0) + 1,
+        totalSpent: (currentClient.totalSpent || 0) + receiptData.totalCharged,
         lastPurchaseDate: receiptData.date,
-        receiptIds: [...currentClient.receiptIds, receiptId]
+        receiptIds: [...(currentClient.receiptIds || []), receiptId]
       });
     } else {
       const newClient: Client = {

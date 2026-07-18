@@ -60,7 +60,7 @@ export const GeneratorView: React.FC<GeneratorViewProps> = ({ onReceiptGenerated
 
   const activeQuantities = useMemo(() => {
     const srv = services.find((s) => s.id === selectedServiceId);
-    return srv ? srv.quantities.filter((q) => q.active) : [];
+    return srv ? srv.quantities.filter((q) => q.active !== false) : [];
   }, [services, selectedServiceId]);
 
   const selectedQuantityObj = useMemo(() => {

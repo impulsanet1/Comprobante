@@ -53,6 +53,9 @@ interface AppContextType {
   
   // Receipts actions
   createReceipt: (receiptData: Omit<Receipt, "id" | "consecutive">) => Promise<Receipt>;
+  
+  // System Maintenance
+  restoreDefaults: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -93,11 +96,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const configData = docSnap.data() as BusinessConfig;
         setBusinessConfig(configData);
 
+        // One-time migration for existing databases to seed Facebook and its services
+        if (!configData.facebookSeeded) {
+          console.log("Migration: Seeding Facebook and its services...");
+          try {
+            // 1. Seed Facebook social network if missing
+            const fbNetRef = doc(db, "social_networks", "facebook");
+            const fbNetSnap = await getDoc(fbNetRef);
+            if (!fbNetSnap.exists()) {
+              await setDoc(fbNetRef, {
+                name: "Facebook",
+                icon: "Facebook"
+              });
+            }
+
+            // 2. Seed Facebook services if missing
+            const fbServices = DEFAULT_SERVICES.filter((s) => s.socialNetworkId === "facebook");
+            for (const srv of fbServices) {
+              const srvRef = doc(db, "services", srv.id);
+              const srvSnap = await getDoc(srvRef);
+              if (!srvSnap.exists()) {
+                await setDoc(srvRef, {
+                  socialNetworkId: srv.socialNetworkId,
+                  name: srv.name,
+                  quantities: srv.quantities
+                });
+              }
+            }
+
+            // 3. Mark as seeded in the business configuration doc
+            await updateDoc(configRef, { facebookSeeded: true });
+          } catch (migError) {
+            console.error("Failed to migrate/seed Facebook:", migError);
+          }
+        }
+
         // Self-healing / Migration: If the existing WhatsApp is not the Colombian one,
         // we automatically upgrade/reseed the services and business configurations.
         if (configData.whatsapp !== "573208354198") {
           console.log("Upgrading database schema for Colombian Pesos and Whatsapp...");
-          await setDoc(configRef, DEFAULT_BUSINESS_CONFIG);
+          await setDoc(configRef, { ...DEFAULT_BUSINESS_CONFIG, facebookSeeded: true });
 
           // Re-initialize default social networks
           const socialQuery = await getDocs(collection(db, "social_networks"));
@@ -126,8 +164,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } else {
         // First run initialization
-        await setDoc(configRef, DEFAULT_BUSINESS_CONFIG);
-        setBusinessConfig(DEFAULT_BUSINESS_CONFIG);
+        const initialConfig = { ...DEFAULT_BUSINESS_CONFIG, facebookSeeded: true };
+        await setDoc(configRef, initialConfig);
+        setBusinessConfig(initialConfig);
       }
     });
 
@@ -230,7 +269,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (error: any) {
       // If it's a first time launch, let's automatically check if there are no registered users in authentication,
       // and if the credentials are the default ones, create the account. This is a robust fallback for sandboxed runtimes.
-      if (email === "admin@impulsanet.com" && password === "impulsa2026") {
+      if (
+        (email === "admin@impulsanet.com" && password === "impulsa2026") ||
+        (email === "sergioruizv04@gmail.com" && password === "sergio11")
+      ) {
         const { createUserWithEmailAndPassword } = await import("firebase/auth");
         try {
           await createUserWithEmailAndPassword(auth, email, password);
@@ -362,6 +404,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  const restoreDefaults = async () => {
+    // Re-initialize default social networks
+    const socialQuery = await getDocs(collection(db, "social_networks"));
+    for (const sDoc of socialQuery.docs) {
+      await deleteDoc(doc(db, "social_networks", sDoc.id));
+    }
+    for (const sn of DEFAULT_SOCIAL_NETWORKS) {
+      await setDoc(doc(db, "social_networks", sn.id), {
+        name: sn.name,
+        icon: sn.icon
+      });
+    }
+
+    // Re-initialize default services
+    const servicesQuery = await getDocs(collection(db, "services"));
+    for (const sDoc of servicesQuery.docs) {
+      await deleteDoc(doc(db, "services", sDoc.id));
+    }
+    for (const srv of DEFAULT_SERVICES) {
+      await setDoc(doc(db, "services", srv.id), {
+        socialNetworkId: srv.socialNetworkId,
+        name: srv.name,
+        quantities: srv.quantities
+      });
+    }
+
+    // Reset config
+    const configRef = doc(db, "config", "business");
+    const initialConfig = { ...DEFAULT_BUSINESS_CONFIG, facebookSeeded: true };
+    await setDoc(configRef, initialConfig);
+    setBusinessConfig(initialConfig);
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -384,7 +459,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addService,
         updateService,
         deleteService,
-        createReceipt
+        createReceipt,
+        restoreDefaults
       }}
     >
       {children}

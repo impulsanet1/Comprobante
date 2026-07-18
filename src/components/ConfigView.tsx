@@ -45,7 +45,8 @@ export const ConfigView: React.FC = () => {
     deleteSocialNetwork,
     addService,
     updateService,
-    deleteService
+    deleteService,
+    restoreDefaults
   } = useApp();
 
   const formatCOP = (val: number) => "$" + Math.round(val).toLocaleString("es-CO");
@@ -68,6 +69,9 @@ export const ConfigView: React.FC = () => {
   const [snNameInput, setSnNameInput] = useState("");
   const [snIconInput, setSnIconInput] = useState("Instagram");
   const [showAddSnForm, setShowAddSnForm] = useState(false);
+  const [deletingSnId, setDeletingSnId] = useState<string | null>(null);
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
 
   // Services state
   const [selectedSocialId, setSelectedSocialId] = useState(socialNetworks[0]?.id || "");
@@ -451,6 +455,59 @@ export const ConfigView: React.FC = () => {
                   Guardar Información
                 </button>
               </form>
+
+              {/* Restore Defaults Block */}
+              <div className="bg-red-50/40 border border-red-100 rounded-xl p-5 space-y-3.5">
+                <div className="flex items-start gap-2.5">
+                  <ShieldAlert className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-850">Zona de Restauración</h4>
+                    <p className="text-[10.5px] text-gray-500 mt-0.5 leading-relaxed">
+                      ¿Has eliminado alguna red social (como Facebook) o modificado precios por error? Haz clic abajo para restaurar todos los valores predeterminados del sistema de venta.
+                    </p>
+                  </div>
+                </div>
+                
+                {showRestoreConfirm ? (
+                  <div className="space-y-2 p-3 bg-red-100/50 border border-red-200 rounded-lg animate-fade-in text-xs">
+                    <p className="font-bold text-red-800 text-[10.5px] leading-snug">
+                      ¿Estás totalmente seguro de restablecer todas las redes, servicios y precios? Esto borrará tus cambios.
+                    </p>
+                    <div className="flex gap-2 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await restoreDefaults();
+                            setShowRestoreConfirm(false);
+                            window.location.reload();
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }}
+                        className="flex-1 py-1.5 px-2 bg-red-600 hover:bg-red-700 text-white rounded text-[10.5px] font-bold cursor-pointer transition text-center"
+                      >
+                        Sí, Restablecer Todo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowRestoreConfirm(false)}
+                        className="flex-1 py-1.5 px-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded text-[10.5px] font-semibold cursor-pointer transition text-center"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowRestoreConfirm(true)}
+                    className="w-full flex justify-center items-center py-2 px-4 border border-red-200 rounded-lg text-xs font-bold text-red-700 bg-white hover:bg-red-50 transition cursor-pointer shadow-2xs"
+                  >
+                    Restaurar Redes y Precios de Fábrica
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Social Networks Admin Column */}
@@ -546,25 +603,58 @@ export const ConfigView: React.FC = () => {
                       <span className="text-xs font-semibold text-gray-900">{sn.name}</span>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => {
-                          setEditingSnId(sn.id);
-                          setSnNameInput(sn.name);
-                          setSnIconInput(sn.icon);
-                          setShowAddSnForm(true);
-                        }}
-                        className="text-gray-400 hover:text-indigo-600 p-1 hover:bg-gray-100 rounded-md transition cursor-pointer"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteSocialNetwork(sn.id)}
-                        className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded-md transition cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                     {deletingSnId === sn.id ? (
+                      <div className="flex items-center gap-1.5 animate-fade-in bg-red-50 p-1.5 rounded-lg border border-red-100">
+                        <span className="text-[9px] font-bold text-red-600 uppercase">¿Borrar?</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await deleteSocialNetwork(sn.id);
+                              if (selectedSocialId === sn.id) {
+                                setSelectedSocialId(socialNetworks.find((s) => s.id !== sn.id)?.id || "");
+                              }
+                            } catch (err) {
+                              console.error(err);
+                            } finally {
+                              setDeletingSnId(null);
+                            }
+                          }}
+                          className="bg-red-650 hover:bg-red-700 text-white text-[10px] px-2 py-0.5 rounded font-bold cursor-pointer transition"
+                        >
+                          Sí
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeletingSnId(null)}
+                          className="bg-white border border-gray-200 text-gray-700 text-[10px] px-2 py-0.5 rounded font-bold cursor-pointer transition"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingSnId(sn.id);
+                            setSnNameInput(sn.name);
+                            setSnIconInput(sn.icon);
+                            setShowAddSnForm(true);
+                          }}
+                          className="text-gray-400 hover:text-indigo-600 p-1 hover:bg-gray-100 rounded-md transition cursor-pointer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeletingSnId(sn.id)}
+                          className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded-md transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -668,12 +758,44 @@ export const ConfigView: React.FC = () => {
                             >
                               {srv.name}
                             </button>
-                            <button
-                              onClick={() => handleDeleteService(srv.id)}
-                              className="text-gray-400 hover:text-red-600 p-1 rounded-md transition shrink-0 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {deletingServiceId === srv.id ? (
+                              <div className="flex items-center gap-1 bg-red-50 p-1 rounded-md border border-red-100 shrink-0 animate-fade-in">
+                                <span className="text-[8px] font-bold text-red-600 uppercase">¿Borrar?</span>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await deleteService(srv.id);
+                                      if (selectedServiceId === srv.id) {
+                                        setSelectedServiceId(null);
+                                      }
+                                    } catch (err) {
+                                      console.error(err);
+                                    } finally {
+                                      setDeletingServiceId(null);
+                                    }
+                                  }}
+                                  className="bg-red-650 hover:bg-red-700 text-white text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer transition"
+                                >
+                                  Sí
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingServiceId(null)}
+                                  className="bg-white border border-gray-200 text-gray-700 text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer transition"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingServiceId(srv.id)}
+                                className="text-gray-400 hover:text-red-600 p-1 rounded-md transition shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         );
                       })

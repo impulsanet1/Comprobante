@@ -8,6 +8,7 @@ export interface BusinessConfig {
   logoUrl: string;
   whatsapp: string;
   warrantyDays: number;
+  facebookSeeded?: boolean;
 }
 
 export interface SocialNetwork {

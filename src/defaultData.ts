@@ -9,7 +9,8 @@ export const DEFAULT_BUSINESS_CONFIG: BusinessConfig = {
   businessName: "ImpulsaNet",
   logoUrl: "", // Empty means text logo
   whatsapp: "573208354198", // Default Colombian number
-  warrantyDays: 30
+  warrantyDays: 30,
+  facebookSeeded: true
 };
 
 export const DEFAULT_SOCIAL_NETWORKS: SocialNetwork[] = [

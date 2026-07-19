@@ -53,6 +53,8 @@ interface AppContextType {
   
   // Receipts actions
   createReceipt: (receiptData: Omit<Receipt, "id" | "consecutive">) => Promise<Receipt>;
+  deleteReceipt: (id: string) => Promise<void>;
+  updateReceipt: (id: string, updatedData: Partial<Receipt>) => Promise<void>;
   
   // System Maintenance
   restoreDefaults: () => Promise<void>;
@@ -269,6 +271,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [user]);
 
+  // 3. Self-healing database cleanup of orphan client records
+  useEffect(() => {
+    if (!user || loadingData || clients.length === 0 || receipts.length === 0) return;
+
+    const performClientCleanup = async () => {
+      // Create a list of active clients based on unique combinations of clientName and clientPhone in receipts
+      const activeKeys = new Set(
+        receipts.map(r => `${r.clientName.trim().toLowerCase()}_${r.clientPhone.trim()}`)
+      );
+
+      for (const client of clients) {
+        const clientKey = `${client.name.trim().toLowerCase()}_${client.phone.trim()}`;
+        
+        if (!activeKeys.has(clientKey)) {
+          console.log(`Self-healing: Deleting client ${client.name} (${client.phone}) with 0 receipts from Firestore.`);
+          try {
+            await deleteDoc(doc(db, "clients", client.id));
+          } catch (e) {
+            console.error("Failed to self-heal orphan client doc:", e);
+          }
+        } else {
+          // Client has receipts, check if the counts and totals match perfectly
+          const matchingReceipts = receipts.filter(
+            (r) =>
+              r.clientName.trim().toLowerCase() === client.name.trim().toLowerCase() &&
+              r.clientPhone.trim() === client.phone.trim()
+          );
+
+          const actualCount = matchingReceipts.length;
+          const actualSpent = matchingReceipts.reduce((sum, r) => sum + (r.totalCharged || 0), 0);
+          
+          // Get the actual latest purchase date from receipts
+          const sorted = [...matchingReceipts].sort(
+            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+          );
+          const actualLastDate = sorted.length > 0 ? sorted[0].date : client.lastPurchaseDate;
+
+          if (
+            client.purchaseCount !== actualCount ||
+            client.totalSpent !== actualSpent ||
+            client.lastPurchaseDate !== actualLastDate
+          ) {
+            console.log(`Self-healing: Syncing stats for client ${client.name} (Stored count: ${client.purchaseCount}, Actual: ${actualCount})`);
+            try {
+              await updateDoc(doc(db, "clients", client.id), {
+                purchaseCount: actualCount,
+                totalSpent: actualSpent,
+                lastPurchaseDate: actualLastDate
+              });
+            } catch (e) {
+              console.error("Failed to self-heal client stats:", e);
+            }
+          }
+        }
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      performClientCleanup();
+    }, 4000); // 4 seconds debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [user, loadingData, receipts, clients]);
+
   // Auth Operations
   const login = async (email: string, password: string) => {
     try {
@@ -416,6 +482,152 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  const deleteReceipt = async (id: string) => {
+    // 1. Get receipt details
+    const receiptDocRef = doc(db, "receipts", id);
+    const receiptSnap = await getDoc(receiptDocRef);
+    if (!receiptSnap.exists()) {
+      // Just in case, try deleting and return
+      await deleteDoc(receiptDocRef);
+      return;
+    }
+    const receiptData = receiptSnap.data() as Receipt;
+
+    // 2. Generate the client ID
+    const normalizedPhone = (receiptData.clientPhone || "").trim().replace(/\D/g, "");
+    const clientId = `${receiptData.clientName.trim().toLowerCase().replace(/\s+/g, "-")}-${normalizedPhone || "no-phone"}`;
+    const clientRef = doc(db, "clients", clientId);
+    const clientSnap = await getDoc(clientRef);
+
+    if (clientSnap.exists()) {
+      const clientData = clientSnap.data() as Client;
+      
+      // Filter out this receipt ID from client's receiptIds
+      const updatedReceiptIds = (clientData.receiptIds || []).filter((rId) => rId !== id);
+      const newPurchaseCount = Math.max(0, (clientData.purchaseCount || 1) - 1);
+      
+      if (updatedReceiptIds.length === 0 || newPurchaseCount <= 0 || (clientData.purchaseCount || 1) <= 1) {
+        // Delete the client if no receipts are left or purchase count becomes 0
+        await deleteDoc(clientRef);
+      } else {
+        // Otherwise, update client purchaseCount, totalSpent, and receiptIds
+        const newTotalSpent = Math.max(0, (clientData.totalSpent || 0) - (receiptData.totalCharged || 0));
+        
+        // Find new lastPurchaseDate by looking up the remaining receipts of this client
+        let lastPurchaseDate = clientData.lastPurchaseDate;
+        const remainingClientReceipts = receipts.filter((r) => r.id !== id && r.clientName.trim().toLowerCase() === receiptData.clientName.trim().toLowerCase());
+        if (remainingClientReceipts.length > 0) {
+          remainingClientReceipts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          lastPurchaseDate = remainingClientReceipts[0].date;
+        }
+
+        await setDoc(clientRef, {
+          ...clientData,
+          purchaseCount: newPurchaseCount,
+          totalSpent: newTotalSpent,
+          receiptIds: updatedReceiptIds,
+          lastPurchaseDate: lastPurchaseDate
+        });
+      }
+    }
+
+    // 3. Delete the receipt
+    await deleteDoc(receiptDocRef);
+  };
+
+  const updateReceipt = async (id: string, updatedData: Partial<Receipt>) => {
+    // 1. Get the current receipt before update
+    const receiptDocRef = doc(db, "receipts", id);
+    const receiptSnap = await getDoc(receiptDocRef);
+    if (!receiptSnap.exists()) {
+      await updateDoc(receiptDocRef, updatedData);
+      return;
+    }
+    const oldReceipt = receiptSnap.data() as Receipt;
+
+    // 2. Perform the update on the receipt
+    await updateDoc(receiptDocRef, updatedData);
+
+    // 3. Determine old and new client details
+    const oldName = oldReceipt.clientName || "";
+    const oldPhone = oldReceipt.clientPhone || "";
+    const oldTotalCharged = oldReceipt.totalCharged || 0;
+
+    const newName = updatedData.clientName !== undefined ? updatedData.clientName : oldName;
+    const newPhone = updatedData.clientPhone !== undefined ? updatedData.clientPhone : oldPhone;
+    const newTotalCharged = updatedData.totalCharged !== undefined ? updatedData.totalCharged : oldTotalCharged;
+
+    const oldNormalizedPhone = oldPhone.trim().replace(/\D/g, "");
+    const oldClientId = `${oldName.trim().toLowerCase().replace(/\s+/g, "-")}-${oldNormalizedPhone || "no-phone"}`;
+
+    const newNormalizedPhone = newPhone.trim().replace(/\D/g, "");
+    const newClientId = `${newName.trim().toLowerCase().replace(/\s+/g, "-")}-${newNormalizedPhone || "no-phone"}`;
+
+    if (oldClientId === newClientId) {
+      // Client did not change, but maybe totalCharged did!
+      const clientRef = doc(db, "clients", oldClientId);
+      const clientSnap = await getDoc(clientRef);
+      if (clientSnap.exists()) {
+        const clientData = clientSnap.data() as Client;
+        const totalSpentDiff = newTotalCharged - oldTotalCharged;
+        await setDoc(clientRef, {
+          ...clientData,
+          totalSpent: Math.max(0, (clientData.totalSpent || 0) + totalSpentDiff),
+          lastPurchaseDate: updatedData.date || oldReceipt.date || clientData.lastPurchaseDate
+        });
+      }
+    } else {
+      // Client changed! We need to subtract from old client and add to new client.
+      
+      // Adjust old client
+      const oldClientRef = doc(db, "clients", oldClientId);
+      const oldClientSnap = await getDoc(oldClientRef);
+      if (oldClientSnap.exists()) {
+        const oldClientData = oldClientSnap.data() as Client;
+        const updatedReceiptIds = (oldClientData.receiptIds || []).filter((rId) => rId !== id);
+        const newPurchaseCount = Math.max(0, (oldClientData.purchaseCount || 1) - 1);
+        
+        if (updatedReceiptIds.length === 0 || newPurchaseCount <= 0 || (oldClientData.purchaseCount || 1) <= 1) {
+          await deleteDoc(oldClientRef);
+        } else {
+          const newTotalSpent = Math.max(0, (oldClientData.totalSpent || 0) - oldTotalCharged);
+          await setDoc(oldClientRef, {
+            ...oldClientData,
+            purchaseCount: newPurchaseCount,
+            totalSpent: newTotalSpent,
+            receiptIds: updatedReceiptIds
+          });
+        }
+      }
+
+      // Add to new client
+      const newClientRef = doc(db, "clients", newClientId);
+      const newClientSnap = await getDoc(newClientRef);
+      const finalDate = updatedData.date || oldReceipt.date;
+      if (newClientSnap.exists()) {
+        const newClientData = newClientSnap.data() as Client;
+        await setDoc(newClientRef, {
+          ...newClientData,
+          purchaseCount: (newClientData.purchaseCount || 0) + 1,
+          totalSpent: (newClientData.totalSpent || 0) + newTotalCharged,
+          lastPurchaseDate: finalDate,
+          receiptIds: [...(newClientData.receiptIds || []).filter((rId) => rId !== id), id]
+        });
+      } else {
+        const newClient: Client = {
+          id: newClientId,
+          name: newName.trim(),
+          phone: newPhone.trim(),
+          purchaseCount: 1,
+          totalSpent: newTotalCharged,
+          lastPurchaseDate: finalDate,
+          receiptIds: [id]
+        };
+        await setDoc(newClientRef, newClient);
+      }
+    }
+  };
+
   const restoreDefaults = async () => {
     // Re-initialize default social networks
     const socialQuery = await getDocs(collection(db, "social_networks"));
@@ -472,6 +684,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateService,
         deleteService,
         createReceipt,
+        deleteReceipt,
+        updateReceipt,
         restoreDefaults
       }}
     >

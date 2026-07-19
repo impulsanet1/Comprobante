@@ -26,12 +26,13 @@ interface HistoryViewProps {
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectReceipt }) => {
-  const { receipts } = useApp();
+  const { receipts, deleteReceipt } = useApp();
   const formatCOP = (val: number) => "$" + Math.round(val).toLocaleString("es-CO");
 
   const [searchText, setSearchText] = useState("");
   const [selectedMonth, setSelectedMonth] = useState(""); // "" means All
   const [selectedYear, setSelectedYear] = useState(""); // "" means All
+  const [deletingReceiptId, setDeletingReceiptId] = useState<string | null>(null);
 
   // Month Names translation helper
   const monthNames = [
@@ -253,14 +254,52 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectReceipt }) => 
 
                     {/* Reprint Action Button */}
                     <td className="py-4 px-6 text-center">
-                      <button
-                        id={`btn-view-receipt-${r.consecutive}`}
-                        onClick={() => onSelectReceipt(r)}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 transition px-3 py-1.5 rounded-lg shadow-2xs cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Ver Comprobante
-                      </button>
+                      {deletingReceiptId === r.id ? (
+                        <div className="inline-flex items-center gap-1 bg-red-50 p-1 rounded-md border border-red-100 shrink-0 animate-fade-in">
+                          <span className="text-[9px] font-bold text-red-600 uppercase mr-1">¿Borrar?</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await deleteReceipt(r.id);
+                              } catch (err) {
+                                console.error(err);
+                              } finally {
+                                setDeletingReceiptId(null);
+                              }
+                            }}
+                            className="bg-red-600 hover:bg-red-700 text-white text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer transition"
+                          >
+                            Sí
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingReceiptId(null)}
+                            className="bg-white border border-gray-200 text-gray-700 text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer transition"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            id={`btn-view-receipt-${r.consecutive}`}
+                            onClick={() => onSelectReceipt(r)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 transition px-2.5 py-1.5 rounded-lg shadow-2xs cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Ver
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingReceiptId(r.id)}
+                            className="inline-flex items-center text-red-500 hover:text-red-700 bg-white border border-red-100 hover:bg-red-50 transition p-1.5 rounded-lg shadow-2xs cursor-pointer"
+                            title="Eliminar Comprobante"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -33,8 +33,32 @@ export const ClientsView: React.FC<ClientsViewProps> = ({ onSelectReceipt }) => 
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
 
   // Search logic
+  const enrichedClients = useMemo(() => {
+    return clients.map((c) => {
+      const actualReceipts = receipts.filter(
+        (r) =>
+          r.clientName.trim().toLowerCase() === c.name.trim().toLowerCase() &&
+          r.clientPhone.trim() === c.phone.trim()
+      );
+      
+      const sortedReceipts = [...actualReceipts].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      const lastDate = sortedReceipts.length > 0 ? sortedReceipts[0].date : c.lastPurchaseDate;
+
+      return {
+        ...c,
+        actualPurchaseCount: actualReceipts.length,
+        actualTotalSpent: actualReceipts.reduce((sum, r) => sum + (r.totalCharged || 0), 0),
+        actualLastPurchaseDate: lastDate,
+        actualReceipts
+      };
+    });
+  }, [clients, receipts]);
+
   const filteredClients = useMemo(() => {
-    return clients.filter((c) => {
+    return enrichedClients.filter((c) => {
+      if (c.actualPurchaseCount <= 0) return false;
       const search = searchText.toLowerCase().trim();
       return (
         search === "" ||
@@ -42,24 +66,19 @@ export const ClientsView: React.FC<ClientsViewProps> = ({ onSelectReceipt }) => 
         c.phone.includes(search)
       );
     });
-  }, [clients, searchText]);
+  }, [enrichedClients, searchText]);
 
   // Find currently selected client object
   const selectedClient = useMemo(() => {
     if (!selectedClientId) return null;
-    return clients.find((c) => c.id === selectedClientId) || null;
-  }, [clients, selectedClientId]);
+    return enrichedClients.find((c) => c.id === selectedClientId) || null;
+  }, [enrichedClients, selectedClientId]);
 
   // Find receipts that belong to the selected client
   const clientReceipts = useMemo(() => {
     if (!selectedClient) return [];
-    // Filter receipts either by matching name+phone or by searching through receiptIds
-    return receipts.filter(
-      (r) =>
-        r.clientName.trim().toLowerCase() === selectedClient.name.trim().toLowerCase() &&
-        r.clientPhone.trim() === selectedClient.phone.trim()
-    );
-  }, [receipts, selectedClient]);
+    return selectedClient.actualReceipts;
+  }, [selectedClient]);
 
   // Format date helper
   const formatDateSimple = (isoString: string) => {
@@ -131,10 +150,10 @@ export const ClientsView: React.FC<ClientsViewProps> = ({ onSelectReceipt }) => 
                     </div>
                     <div className="text-right shrink-0">
                       <div className="text-xs font-mono font-bold text-gray-900">
-                        {formatCOP(client.totalSpent)}
+                        {formatCOP(client.actualTotalSpent)}
                       </div>
                       <div className="text-[9px] text-gray-400 uppercase tracking-wider font-semibold">
-                        {client.purchaseCount} {client.purchaseCount === 1 ? "compra" : "compras"}
+                        {client.actualPurchaseCount} {client.actualPurchaseCount === 1 ? "compra" : "compras"}
                       </div>
                     </div>
                   </button>
@@ -161,18 +180,18 @@ export const ClientsView: React.FC<ClientsViewProps> = ({ onSelectReceipt }) => 
                   </div>
                   <div className="bg-indigo-50 text-indigo-700 rounded-xl p-3 text-center border border-indigo-100/50">
                     <div className="text-[9px] font-bold uppercase tracking-wider text-indigo-500">Total Consumido</div>
-                    <div className="text-lg font-bold mt-0.5">{formatCOP(selectedClient.totalSpent)}</div>
+                    <div className="text-lg font-bold mt-0.5">{formatCOP(selectedClient.actualTotalSpent)}</div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4 text-xs">
                   <div>
                     <span className="text-gray-400">Total de Compras:</span>
-                    <strong className="text-gray-800 ml-1.5">{selectedClient.purchaseCount} comprobantes</strong>
+                    <strong className="text-gray-800 ml-1.5">{selectedClient.actualPurchaseCount} comprobantes</strong>
                   </div>
                   <div>
                     <span className="text-gray-400">Última compra:</span>
-                    <strong className="text-gray-800 ml-1.5 font-mono">{formatDateSimple(selectedClient.lastPurchaseDate)}</strong>
+                    <strong className="text-gray-800 ml-1.5 font-mono">{formatDateSimple(selectedClient.actualLastPurchaseDate)}</strong>
                   </div>
                 </div>
               </div>
